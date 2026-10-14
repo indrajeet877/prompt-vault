@@ -99,7 +99,7 @@ def render(title_html, subtitle, count, edition, intro_html, prompts, bodykey="b
     </section>
     <section class="intro">{intro_html}</section>
     {blocks}
-    <div class="footer-note">© ProPrompt · getproprompt.com · <span class="sig">crafted by Indrajeet Yadav</span></div>
+    <div class="footer-note">© ProPrompt · getproprompt.com · <span class="sig">crafted by ProPrompt</span></div>
     </body></html>"""
 
 # ---------------- PAID: The Founder's War Room ----------------

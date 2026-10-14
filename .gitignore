@@ -18,6 +18,9 @@ functions/
 supabase/
 tools/load-premium.mjs
 data/bodies.free.json
+data/bodies.free.byid.json
+data/corpus.json
+incoming/
 
 # Local editor / agent state
 .claude/

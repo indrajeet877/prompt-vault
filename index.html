@@ -373,7 +373,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     </div>
     <div class="nav-right">
       <button class="btn btn-gold" id="navBrowseBtn">Browse the vault</button>
-      <button class="menu-toggle" aria-label="Open menu" id="menuToggle"><i>&#8801;</i></button>
+      <button class="menu-toggle" aria-label="Open menu" aria-expanded="false" id="menuToggle"><i>&#8801;</i></button>
     </div>
   </div>
 </nav>
@@ -639,6 +639,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
       if (!links) return;
       var open = links.style.display === 'flex';
       links.style.display = open ? '' : 'flex';
+      menuToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
       links.style.position = 'absolute';
       links.style.flexDirection = 'column';
       links.style.top = '64px';
@@ -709,9 +710,11 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
   var GROUP_BY_KEY = {};
   var activeGroup = 'all';
   var searchTerm = '';
+  var state = { q: '' };
   var filtered = [];
   var rendered = 0;
   var BATCH = 30;
+  var bodiesReady = false;
 
   var grid = document.getElementById('grid');
   var loadMore = document.getElementById('loadMore');
@@ -728,16 +731,28 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     });
   }
 
+  function slugify(t){
+    var s = String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50).replace(/^-+|-+$/g, '');
+    return s || 'prompt';
+  }
+
   // Every prompt body ships statically in data/bodies.byid.json ({id: {p, h}}).
-  // Nothing is gated — the whole vault is free.
+  // Fetch bodies asynchronously in the background so catalog + UI render immediately.
+  var bodiesPromise = fetchJSON('./data/bodies.byid.json').then(function(b){
+    BODIES = b || {};
+    bodiesReady = true;
+    return BODIES;
+  }).catch(function(){
+    bodiesReady = true;
+    return BODIES;
+  });
+
   Promise.all([
     fetchJSON('./data/catalog.json'),
-    fetchJSON('./data/meta.json'),
-    fetchJSON('./data/bodies.byid.json')
+    fetchJSON('./data/meta.json')
   ]).then(function(res){
     CATALOG = res[0] || [];
     META = res[1] || { total: CATALOG.length, groups: [] };
-    BODIES = res[2] || {};
     init();
   }).catch(function(err){
     if (grid) grid.innerHTML = '<div class="no-results"><span class="nr-ic">&#9888;</span>Couldn\'t load the vault. Serve this folder over http (not file://) and reload.</div>';
@@ -745,6 +760,20 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
   });
 
   function init(){
+    var usedSlugs = {};
+    CATALOG.forEach(function(p){
+      if (p.id == null) p.id = String(p.i);
+      if (!p.s){
+        var base = slugify(p.t);
+        var s = base;
+        if (usedSlugs[s] !== undefined && usedSlugs[s] !== p.i){
+          s = base.slice(0, 44) + '-' + p.i;
+        }
+        usedSlugs[s] = p.i;
+        p.s = s;
+      }
+    });
+
     META.groups = META.groups || [];
     META.groups.forEach(function(g){ GROUP_BY_KEY[g.key] = g; });
 
@@ -777,6 +806,28 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     renderCollections();
     renderChips();
     applyFilters();
+
+    var params = new URLSearchParams(window.location.search);
+    var qParam = params.get('q');
+    if (qParam){
+      if (searchInput) searchInput.value = qParam;
+      if (searchClear) searchClear.classList.toggle('on', qParam.length > 0);
+      searchTerm = qParam.trim().toLowerCase();
+      state.q = searchTerm;
+      renderResults();
+      var b = document.getElementById('browse');
+      if (b) b.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    }
+    var pParam = params.get('p');
+    if (pParam){
+      var slug = pParam.trim();
+      var match = CATALOG.find(function(p){
+        return p.s === slug || p.id === slug || String(p.i) === slug || slugify(p.t) === slug;
+      });
+      if (match){
+        bodiesPromise.then(function(){ openModal(match); });
+      }
+    }
   }
 
   function setText(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; }
@@ -798,7 +849,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     META.groups.forEach(function(g, idx){
       var d = (idx % 4) + 1;
       var desc = collectionBlurb(g);
-      html += '<div class="coll reveal d' + d + '" data-group="' + esc(g.key) + '" style="--g-col:' + esc(g.color) + '">'
+      html += '<div class="coll reveal d' + d + '" tabindex="0" role="button" data-group="' + esc(g.key) + '" style="--g-col:' + esc(g.color) + '">'
         + '<span class="num">' + fmt(g.count) + ' prompts</span>'
         + '<i class="ci">' + esc(g.icon) + '</i>'
         + '<h4>' + esc(g.label) + '</h4>'
@@ -810,6 +861,12 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     collGrid.querySelectorAll('.coll').forEach(function(c){
       c.addEventListener('click', function(){
         selectGroup(c.getAttribute('data-group'), true);
+      });
+      c.addEventListener('keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' '){
+          e.preventDefault();
+          selectGroup(c.getAttribute('data-group'), true);
+        }
       });
     });
   }
@@ -862,6 +919,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
       clearTimeout(searchTimer);
       searchTimer = setTimeout(function(){
         searchTerm = searchInput.value.trim().toLowerCase();
+        state.q = searchTerm;
         applyFilters();
       }, 130);
     });
@@ -870,6 +928,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     searchClear.addEventListener('click', function(){
       searchInput.value = '';
       searchTerm = '';
+      state.q = '';
       searchClear.classList.remove('on');
       applyFilters();
       searchInput.focus();
@@ -877,6 +936,7 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
   }
 
   /* ---------- filtering ---------- */
+  function renderResults(){ applyFilters(); }
   function applyFilters(){
     var q = searchTerm;
     filtered = CATALOG.filter(function(p){
@@ -916,6 +976,8 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     var col = g ? g.color : 'var(--gold)';
     var card = document.createElement('article');
     card.className = 'pcard';
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('role', 'button');
     card.setAttribute('data-id', p.i);
     card.style.setProperty('--p-col', col);
     var vcount = (p.v && p.v.length) ? p.v.length : 0;
@@ -931,6 +993,12 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
         + '<span class="open-ic">&#8599;</span>'
       + '</div>';
     card.addEventListener('click', function(){ openModal(p); });
+    card.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        openModal(p);
+      }
+    });
     return card;
   }
 
@@ -942,17 +1010,24 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     }
     if (searchTerm){ parts += ' matching &ldquo;' + esc(searchTerm) + '&rdquo;'; }
     if (activeGroup !== 'all' || searchTerm){
-      parts += ' <span class="clearfilter" id="clearAll">clear filters</span>';
+      parts += ' <span class="clearfilter" id="clearAll" tabindex="0" role="button">clear filters</span>';
     }
     resultLine.innerHTML = parts;
     var ca = document.getElementById('clearAll');
     if (ca){
-      ca.addEventListener('click', function(){
-        activeGroup = 'all'; searchTerm = '';
+      var clearFn = function(){
+        activeGroup = 'all'; searchTerm = ''; state.q = '';
         if (searchInput) searchInput.value = '';
         if (searchClear) searchClear.classList.remove('on');
         setActiveChip();
         applyFilters();
+      };
+      ca.addEventListener('click', clearFn);
+      ca.addEventListener('keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' '){
+          e.preventDefault();
+          clearFn();
+        }
       });
     }
   }
@@ -987,8 +1062,18 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
     modalCat.innerHTML = (g ? '<span style="font-size:1rem">' + esc(g.icon) + '</span>' : '') + esc(g ? g.label : (p.c || 'Prompt'));
     modalTitle.textContent = p.t;
     modalDesc.textContent = p.te || '';
-    var rec = localBody(p);
-    paintBody(p, rec.p || p.te || '', rec.h || '');
+    if (bodiesReady){
+      var rec = localBody(p);
+      paintBody(p, rec.p || p.te || '', rec.h || '');
+    } else {
+      modalBody.textContent = 'Loading prompt…';
+      document.body.classList.add('modal-open');
+      modalBack.classList.add('show');
+      bodiesPromise.then(function(){
+        var rec = localBody(p);
+        paintBody(p, rec.p || p.te || '', rec.h || '');
+      });
+    }
   }
 
   // Paint a resolved body string into fillable segments.
@@ -1009,6 +1094,12 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
         inp.placeholder = seg.token;
         inp.setAttribute('aria-label', seg.token);
         inp.style.width = Math.max(70, Math.min(320, seg.token.length * 8.4 + 26)) + 'px';
+        inp.addEventListener('input', function(){
+          var val = inp.value;
+          modalBody.querySelectorAll('.v-input[data-token="' + cssEsc(seg.token) + '"]').forEach(function(other){
+            if (other !== inp) other.value = val;
+          });
+        });
         modalBody.appendChild(inp);
       }
     });
@@ -1145,10 +1236,6 @@ footer{position:relative;z-index:3;border-top:1px solid var(--line);padding:72px
   if (navBrowseBtn) navBrowseBtn.addEventListener('click', goBrowse);
   var heroBrowseBtn = document.getElementById('heroBrowseBtn');
   if (heroBrowseBtn) heroBrowseBtn.addEventListener('click', goBrowse);
-
-  /* ---------- menu toggle (mobile) ---------- */
-  var menuToggle = document.getElementById('menuToggle');
-  if (menuToggle) menuToggle.addEventListener('click', goBrowse);
 })();
 </script>
 </body>
